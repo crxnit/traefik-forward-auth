@@ -8,9 +8,10 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// providerHTTPTimeout caps outbound HTTP calls to identity providers (token
-// exchange, userinfo). A slow or unresponsive provider would otherwise hang
-// the auth path indefinitely.
+// providerHTTPTimeout caps per-request HTTP calls to identity providers
+// (token exchange, userinfo, ID-token verify including JWKS refresh, OIDC
+// discovery). A slow or unresponsive provider would otherwise hang the
+// auth path — or, at Setup time, startup itself.
 const providerHTTPTimeout = 10 * time.Second
 
 // Providers contains all the implemented providers
@@ -43,7 +44,6 @@ type OAuthProvider struct {
 	Resource string `long:"resource" env:"RESOURCE" description:"Optional resource indicator"`
 
 	Config *oauth2.Config
-	ctx    context.Context
 }
 
 // ConfigCopy returns a copy of the oauth2 config with the given redirectURI
@@ -68,5 +68,7 @@ func (p *OAuthProvider) OAuthGetLoginURL(redirectURI, state string) string {
 // OAuthExchangeCode provides a base "ExchangeCode" for proiders using OAauth2
 func (p *OAuthProvider) OAuthExchangeCode(redirectURI, code string) (*oauth2.Token, error) {
 	config := p.ConfigCopy(redirectURI)
-	return config.Exchange(p.ctx, code)
+	ctx, cancel := context.WithTimeout(context.Background(), providerHTTPTimeout)
+	defer cancel()
+	return config.Exchange(ctx, code)
 }

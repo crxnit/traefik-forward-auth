@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,8 +44,6 @@ func (o *GenericOAuth) Setup() error {
 		},
 		Scopes: o.Scopes,
 	}
-
-	o.ctx = context.Background()
 
 	return nil
 }
