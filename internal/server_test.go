@@ -186,27 +186,34 @@ func TestServerAuthCallback(t *testing.T) {
 
 	// Should catch invalid csrf cookie
 	nonce := "12345678901234567890123456789012"
-	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":http://redirect")
+	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":http://example.com")
 	c := MakeCSRFCookie(req, "nononononononononononononononono")
 	res, _ = doHttpRequest(req, c)
 	assert.Equal(401, res.StatusCode, "auth callback with invalid cookie shouldn't be authorised")
 
 	// Should catch invalid provider cookie
-	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":invalid:http://redirect")
+	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":invalid:http://example.com")
 	c = MakeCSRFCookie(req, nonce)
 	res, _ = doHttpRequest(req, c)
 	assert.Equal(401, res.StatusCode, "auth callback with invalid provider shouldn't be authorised")
 
+	// Should reject redirect to a host that is neither in the cookie-domain
+	// allowlist nor equal to the request host (open-redirect guard).
+	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":google:http://evil.com/path")
+	c = MakeCSRFCookie(req, nonce)
+	res, _ = doHttpRequest(req, c)
+	assert.Equal(401, res.StatusCode, "auth callback with non-allowlisted redirect should be rejected")
+
 	// Should redirect valid request
-	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":google:http://redirect")
+	req = newHTTPRequest("GET", "http://example.com/_oauth?state="+nonce+":google:http://example.com/path")
 	c = MakeCSRFCookie(req, nonce)
 	res, _ = doHttpRequest(req, c)
 	require.Equal(307, res.StatusCode, "valid auth callback should be allowed")
 
 	fwd, _ := res.Location()
 	assert.Equal("http", fwd.Scheme, "valid request should be redirected to return url")
-	assert.Equal("redirect", fwd.Host, "valid request should be redirected to return url")
-	assert.Equal("", fwd.Path, "valid request should be redirected to return url")
+	assert.Equal("example.com", fwd.Host, "valid request should be redirected to return url")
+	assert.Equal("/path", fwd.Path, "valid request should be redirected to return url")
 }
 
 func TestServerAuthCallbackExchangeFailure(t *testing.T) {
