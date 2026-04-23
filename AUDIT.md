@@ -1,0 +1,54 @@
+# Security audit — traefik-forward-auth fork (v2.3.0)
+
+## Scope and method
+
+This is a one-day triage of [thomseddon/traefik-forward-auth@v2.3.0](https://github.com/thomseddon/traefik-forward-auth/tree/v2.3.0) (26e7995, 2024-05-06), the latest stable upstream release tag, forked as `crxnit/traefik-forward-auth` for downstream consumption by `crxnit/traefik-nginx-portal`. The audit branch is cut from the tag, not upstream `master` (which is 2 commits ahead: a go-jose dep bump). Method: run `go vet`, `staticcheck`, `gosec -severity low`, `govulncheck`, and `trivy image` on both the upstream `:latest` image and a locally-built image from our fork's Dockerfile. Then manual review of auth-critical paths (OAuth callback, cookie handling, CSRF/state, X-Forwarded-* trust boundary, log hygiene) with a 20-minute timebox per finding. Severity tiers: Critical / High / Medium / Low / Info.
+
+## Scan summary
+
+| Tool          | Result                                                              |
+|---------------|---------------------------------------------------------------------|
+| go vet        | 0 findings                                                          |
+| staticcheck   | ~36 style/deprecation findings; 0 security-impacting                |
+| gosec         | 0 High / 6 Medium / 2 Low                                           |
+| govulncheck   | **30 reachable vulnerabilities** (26 in traefik/v2@v2.11.2, 4 Go stdlib) |
+| trivy (fork)  | **24 HIGH+CRITICAL in locally-built image** (4 CRITICAL, 20 HIGH)   |
+| trivy (upstream `:latest`) | 70 HIGH+CRITICAL — 2021 image, no published v2.3.0 image |
+
+## Findings
+
+| Severity | File:Line | Description | Proposed fix | Status |
+|---|---|---|---|---|
+| High | `go.mod:12` | `github.com/traefik/traefik/v2@v2.11.2` — govulncheck reports 26 reachable vulns (GO-2024-2880…GO-2026-4897): DNS loop, HTTP/2 panic, mTLS bypass, Plugin path traversal, oauth2/jws improper validation, gRPC deny-rule bypass, etc. | Bump to `v2.11.42`. NOT trivial — bumping also cascades `golang.org/x/sys/crypto/net/text`, and the pinned `replace github.com/gorilla/mux => github.com/containous/mux` must be updated (verified: build breaks on `mux.NewRouter().UseRoutingPath` symbol missing). | Deferred — follow-up PR |
+| High | `go.mod:3` (Go 1.22 + toolchain go1.22.2) | 4 reachable stdlib CVEs: GO-2026-4947/4946/4866 (crypto/x509), GO-2026-4870 (crypto/tls), GO-2026-4865 (html/template). All fixed in `go1.26.2`. | Bump `go 1.22` → `go 1.26`, `toolchain go1.26.2`, and `Dockerfile` base image `golang:1.22-alpine` → `golang:1.26-alpine`. Trivial edits but gated on the traefik bump above since CI must pass together. | Deferred — bundled with traefik bump |
+| High | image | `golang.org/x/crypto@v0.23.0` — CVE-2024-45337 (CRITICAL): `ServerConfig.PublicKeyCallback` misuse can cause SSH authorization bypass. Pulled transitively via traefik. | Resolved by traefik bump (pulls `x/crypto` to v0.48.0). | Deferred with traefik bump |
+| High | image | `golang.org/x/oauth2@v0.20.0` — CVE-2025-22868 (HIGH): unexpected memory consumption in `oauth2/jws` token parsing. Used by OIDC flow. | Bump `golang.org/x/oauth2` to `v0.27.0+`. Trivial in isolation; bundled with traefik bump. | Deferred |
+| Medium | `internal/auth.go:170,183,204,217` | 4× `http.Cookie` constructed without a `SameSite` value (gosec G124, CWE-614). Go default is `SameSiteDefaultMode` → browser-dependent (modern Chrome uses Lax; older browsers: None). Inconsistent security posture for auth + CSRF cookies. | Add `SameSite: http.SameSiteLaxMode` to all four cookies. Must be Lax (not Strict), because the OIDC callback is a top-level cross-site redirect that needs to send the CSRF cookie. | Documented — one-line-each fix deferred to follow-up PR |
+| Medium | `internal/server.go:197` | `http.Redirect(w, r, redirect, ...)` sends user to `redirect` value extracted from the state parameter. `redirect` is derived from `r.Host` + `r.URL.Path` at auth-initiation time, both of which flow from `X-Forwarded-Host`/`X-Forwarded-Uri` (set in `RootHandler`, server.go:59-65). No allowlist validation of the redirect target. If the operator's Traefik is misconfigured to forward attacker-controlled Host headers (or if an attacker controls a host within the cookie domain), this enables open-redirect / auth-cookie delivery to attacker subdomain. | Validate redirect host is in `config.CookieDomains` before `http.Redirect`. | Needs deeper review — requires design for what "trusted host" means in multi-tenant deploys |
+| Medium | `cmd/main.go:30` | `http.ListenAndServe` without read/write/idle timeouts (gosec G114, CWE-676). Slow-loris / resource-exhaustion vector. | Replace with `&http.Server{ Addr: …, ReadHeaderTimeout: 5 * time.Second, …}.ListenAndServe()`. Trivial code change but needs new config knobs for tuning. | Deferred — follow-up PR |
+| Medium | `internal/server.go:260-262` | Debug log emits `cookies: r.Cookies()` on every request. If debug logging is enabled in production (common during troubleshooting), the auth cookie's HMAC + email + expiry are written to logs. Also `server.go:151,162,242` log entire `csrf_cookie` struct including the nonce in Warn/Debug events. | Redact cookie values: log cookie name only; remove `csrf_cookie` field from log events (state already identifies the flow). | Documented — trivial but touches multiple sites |
+| Medium | `internal/auth.go:241` | `c.Value != state[:32]` — CSRF nonce comparison uses non-constant-time equality. Nonce is 32-hex-char / 128 bits random and single-use, so practical exploitation requires millions of timed attempts against the same nonce (infeasible), but defense-in-depth says use `subtle.ConstantTimeCompare`. | `subtle.ConstantTimeCompare([]byte(c.Value), []byte(state[:32])) == 1`. | Documented |
+| Medium | `internal/config.go:24-25,33-34`, `internal/provider/generic_oauth.go:20-21` | staticcheck SA5008 — duplicate `choice:` / `default:` struct tags. Looks suspicious but `thomseddon/go-flags` intentionally supports repeated `choice`/`default` tags to enumerate multiple allowed values / multi-value defaults. Verified by reading the library. **False positive.** | Document only; add `//nolint:staticcheck` or suppress if CI staticcheck is ever promoted to fail-on-finding. | No action |
+| Low | `internal/config.go:245` | `ioutil.ReadFile(name)` where `name` is the legacy-config path from CLI flags (gosec G304, CWE-22). Startup-time, operator-controlled input — not externally reachable. Also uses deprecated `io/ioutil`. | Switch to `os.ReadFile` and document that the caller controls the path. | No action |
+| Low | `internal/config.go:216,220` | `list.UnmarshalFlag(val)` return value ignored (gosec G104). UnmarshalFlag always returns nil in practice, but swallowing the error means future changes won't surface. | `if err := list.UnmarshalFlag(val); err != nil { return err }`. | No action (functionally inert today) |
+| Low | `internal/provider/google.go:86,99`, `internal/provider/generic_oauth.go:86` | `http.Client{}` constructed without `Timeout` for token-exchange / user-info HTTP calls to OIDC/OAuth providers. Slow external provider can hang the auth path. | Add `Timeout: 10 * time.Second`. | Deferred |
+| Info | multiple (`internal/config.go`, `internal/server_test.go`, `internal/provider/*_test.go`) | staticcheck SA1019 — `io/ioutil` deprecated since Go 1.19; `httptest.ResponseRecorder.HeaderMap` deprecated since Go 1.11. Style fixes ST1005 (capitalized errors), ST1008 (error-last-return), ST1013 (use `http.StatusXxx` constants), S1021/S1031. | Cleanup PR; no security impact. | No action |
+| Info | upstream `thomseddon/traefik-forward-auth:latest` on Docker Hub | 70 HIGH+CRITICAL CVEs — image last pushed 2021-06-24, predating v2.3.0. **There is no upstream-published image for v2.3.0.** | This is the motivation for publishing our own image from source. Downstream consumers MUST NOT use the upstream tag. | Noted — motivates this project |
+
+## Manual-review conclusions (auth-critical paths)
+
+- **OAuth callback (`server.go:122-199`)** — state parameter is verified against a CSRF cookie (nonce, 16 bytes random). The redirect target embedded in state is NOT validated against an allowlist; see the Medium open-redirect finding above.
+- **OIDC ID-token validation (`provider/oidc.go:88`)** — delegated to `coreos/go-oidc` v2.2.1. Library validates signature (JWKS), issuer, expiry, and audience (ClientID passed in config at line 56). No custom `SupportedSigningAlgs`; the library defaults to RS256/ES256/PS256 families and rejects `alg: none`. **No alg-confusion risk found.** Clock-skew tolerance is default (0); could cause intermittent false rejections on clock-skewed providers but not a security issue.
+- **Generic OAuth provider (`provider/generic_oauth.go:70-96`)** — trusts the `email` field returned by the user-info endpoint without secondary verification. This is a known OAuth2 (vs OIDC) design constraint; operators must choose a trustworthy provider. Documented limitation, not a fix target.
+- **Cookie HMAC (`auth.go:316-322`)** — `sha256.HMAC` keyed with `config.Secret`, bound to `cookieDomain(r) || email || expires`. `ValidateCookie` uses `hmac.Equal` (constant-time). **No HMAC-bypass vector found.** Caveat: if the secret ever leaks, all previously-issued cookies become forgeable indefinitely — there is no secret rotation / key-ID mechanism. Informational.
+- **X-Forwarded-* trust (`server.go:57-69`)** — `RootHandler` overwrites `r.Method`, `r.Host`, and `r.URL` from headers set by the upstream proxy. There is no verification that the request actually arrived via the expected proxy. Correct behavior assumes Traefik is the only ingress and strips/replaces these headers. Document as deployment precondition.
+- **Log hygiene** — see the Medium finding on `r.Cookies()` / `csrf_cookie` field logging.
+
+## Follow-up PRs worth scheduling
+
+1. **Dependency + Go toolchain bump** (closes all High findings): `go get github.com/traefik/traefik/v2@v2.11.42`, update `replace github.com/gorilla/mux => …` to a containous/mux commit that carries `UseRoutingPath`, bump `go 1.22` → `go 1.26` + `toolchain go1.26.2`, bump `Dockerfile` to `golang:1.26-alpine`. Validate build + tests.
+2. **Cookie hardening**: add `SameSite: Lax` to all 4 cookie sites; strip cookie values from logs.
+3. **Redirect allowlist**: validate redirect target host against `config.CookieDomains` in `AuthCallbackHandler` before `http.Redirect`.
+4. **HTTP server timeouts**: replace `http.ListenAndServe` with a configured `*http.Server`.
+5. **Constant-time CSRF compare**: `subtle.ConstantTimeCompare` in `ValidateCSRFCookie`.
+6. **External HTTP client timeouts** in `provider/google.go` and `provider/generic_oauth.go`.
