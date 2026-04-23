@@ -25,10 +25,12 @@ jobs:
           short_sha="$(git rev-parse --short=7 HEAD)"
           tag="${version}-${short_sha}"
           image="ghcr.io/${{ github.repository_owner }}/traefik-forward-auth"
-          echo "version=${version}"   >> "$GITHUB_OUTPUT"
-          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}"           >> "$GITHUB_OUTPUT"
-          echo "image=${image}"       >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${version}"
+            echo "short_sha=${short_sha}"
+            echo "tag=${tag}"
+            echo "image=${image}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
