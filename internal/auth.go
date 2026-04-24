@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -246,8 +247,9 @@ func ValidateCSRFCookie(c *http.Cookie, state string) (valid bool, provider stri
 		return false, "", "", errors.New("Invalid CSRF cookie value")
 	}
 
-	// Check nonce match
-	if c.Value != state[:32] {
+	// Check nonce match with a constant-time compare. The length check above
+	// guarantees both operands are 32 bytes so ConstantTimeCompare is valid.
+	if subtle.ConstantTimeCompare([]byte(c.Value), []byte(state[:32])) != 1 {
 		return false, "", "", errors.New("CSRF cookie does not match state")
 	}
 
