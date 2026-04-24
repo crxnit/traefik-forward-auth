@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // Google provider
@@ -80,7 +81,13 @@ func (g *Google) ExchangeCode(redirectURI, code string) (string, error) {
 	form.Set("redirect_uri", redirectURI)
 	form.Set("code", code)
 
-	res, err := http.PostForm(g.TokenURL.String(), form)
+	client := &http.Client{Timeout: providerHTTPTimeout}
+	req, err := http.NewRequest("POST", g.TokenURL.String(), strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -96,7 +103,7 @@ func (g *Google) ExchangeCode(redirectURI, code string) (string, error) {
 func (g *Google) GetUser(token string) (User, error) {
 	var user User
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: providerHTTPTimeout}
 	req, err := http.NewRequest("GET", g.UserURL.String(), nil)
 	if err != nil {
 		return user, err

@@ -83,7 +83,7 @@ func (o *GenericOAuth) GetUser(token string) (User, error) {
 		req.URL.RawQuery = q.Encode()
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: providerHTTPTimeout}
 	res, err := client.Do(req)
 	if err != nil {
 		return user, err

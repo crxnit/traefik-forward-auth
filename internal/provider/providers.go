@@ -2,10 +2,16 @@ package provider
 
 import (
 	"context"
+	"time"
 	// "net/url"
 
 	"golang.org/x/oauth2"
 )
+
+// providerHTTPTimeout caps outbound HTTP calls to identity providers (token
+// exchange, userinfo). A slow or unresponsive provider would otherwise hang
+// the auth path indefinitely.
+const providerHTTPTimeout = 10 * time.Second
 
 // Providers contains all the implemented providers
 type Providers struct {
