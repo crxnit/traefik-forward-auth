@@ -185,6 +185,17 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 			return
 		}
 
+		// Validate redirect target before setting the auth cookie so we
+		// never authenticate a user and then ship them to an attacker host.
+		if err := ValidateRedirect(r, redirect); err != nil {
+			logger.WithFields(logrus.Fields{
+				"error":    err,
+				"redirect": redirect,
+			}).Warn("Rejected callback: redirect target failed allowlist check")
+			http.Error(w, "Not authorized", http.StatusUnauthorized)
+			return
+		}
+
 		// Generate cookie
 		http.SetCookie(w, MakeCookie(r, user.Email))
 		logger.WithFields(logrus.Fields{

@@ -372,6 +372,96 @@ func TestValidateState(t *testing.T) {
 	assert.Nil(err, "valid request should not return an error")
 }
 
+func TestValidateRedirect(t *testing.T) {
+	newReq := func(host string) *http.Request {
+		r := httptest.NewRequest("GET", "http://"+host+"/", nil)
+		r.Host = host
+		return r
+	}
+
+	tests := []struct {
+		name          string
+		cookieDomains []string
+		requestHost   string
+		redirect      string
+		wantErr       string // substring; empty means must succeed
+	}{
+		// ---- allowlist mode (CookieDomains is non-empty) ----
+		{
+			name:          "allowlist: exact match",
+			cookieDomains: []string{"example.com"},
+			requestHost:   "auth.example.com",
+			redirect:      "https://example.com/app",
+		},
+		{
+			name:          "allowlist: subdomain match",
+			cookieDomains: []string{"example.com"},
+			requestHost:   "auth.example.com",
+			redirect:      "https://foo.example.com/bar",
+		},
+		{
+			name:          "allowlist: off-allowlist host rejected",
+			cookieDomains: []string{"example.com"},
+			requestHost:   "auth.example.com",
+			redirect:      "https://evil.com/app",
+			wantErr:       "not in cookie-domain allowlist",
+		},
+		// ---- no-allowlist mode (fall back to request host) ----
+		{
+			name:        "no-allowlist: matches request host",
+			requestHost: "example.com",
+			redirect:    "http://example.com/path",
+		},
+		{
+			name:        "no-allowlist: port-stripped match",
+			requestHost: "example.com:8080",
+			redirect:    "http://example.com/path",
+		},
+		{
+			name:        "no-allowlist: host mismatch rejected",
+			requestHost: "example.com",
+			redirect:    "http://evil.com/path",
+			wantErr:     "does not match request host",
+		},
+		// ---- structural rejections (both modes) ----
+		{
+			name:        "scheme: javascript rejected",
+			requestHost: "example.com",
+			redirect:    "javascript:alert(1)",
+			wantErr:     "scheme",
+		},
+		{
+			name:        "scheme: empty rejected",
+			requestHost: "example.com",
+			redirect:    "//evil.com/path",
+			wantErr:     "scheme",
+		},
+		{
+			name:        "host: missing rejected",
+			requestHost: "example.com",
+			redirect:    "http:///path",
+			wantErr:     "missing host",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config = newDefaultConfig()
+			for _, d := range tt.cookieDomains {
+				config.CookieDomains = append(config.CookieDomains, *NewCookieDomain(d))
+			}
+			err := ValidateRedirect(newReq(tt.requestHost), tt.redirect)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			if assert.Error(t, err) {
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestMakeState(t *testing.T) {
 	assert := assert.New(t)
 

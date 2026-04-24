@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -270,6 +271,46 @@ func MakeState(r *http.Request, p provider.Provider, nonce string) string {
 func ValidateState(state string) error {
 	if len(state) < 34 {
 		return errors.New("Invalid CSRF state value")
+	}
+	return nil
+}
+
+// ValidateRedirect guards against open-redirect by checking that the redirect
+// target parses as an absolute http(s) URL whose host is either in the
+// configured cookie-domain allowlist or, if no cookie domains are configured,
+// equal to the current request host.
+//
+// The redirect target originates from the state parameter, which is set at
+// auth-initiation time from `X-Forwarded-Proto://<X-Forwarded-Host><path>`.
+// Without this check, a request that arrives with an attacker-controlled Host
+// header would round-trip through OIDC and then redirect the authenticated
+// user to the attacker's domain.
+func ValidateRedirect(r *http.Request, redirect string) error {
+	u, err := url.Parse(redirect)
+	if err != nil {
+		return fmt.Errorf("unparseable redirect: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("redirect scheme %q is not http(s)", u.Scheme)
+	}
+	if u.Host == "" {
+		return errors.New("redirect missing host")
+	}
+
+	if len(config.CookieDomains) > 0 {
+		if matched, _ := matchCookieDomains(u.Host); matched {
+			return nil
+		}
+		return fmt.Errorf("redirect host %q not in cookie-domain allowlist", u.Host)
+	}
+
+	// No cookie domains configured: fall back to requiring the redirect host to
+	// match the current request host exactly. Strip port from both sides before
+	// comparing so that e.g. a deploy sitting behind TLS-terminating proxy works.
+	redirectHost := strings.Split(u.Host, ":")[0]
+	requestHost := strings.Split(r.Host, ":")[0]
+	if redirectHost != requestHost {
+		return fmt.Errorf("redirect host %q does not match request host %q", redirectHost, requestHost)
 	}
 	return nil
 }
