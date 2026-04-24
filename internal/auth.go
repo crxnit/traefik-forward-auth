@@ -162,6 +162,10 @@ func useAuthDomain(r *http.Request) (bool, string) {
 // Cookie methods
 
 // MakeCookie creates an auth cookie
+//
+// SameSite=Lax so the cookie is sent on top-level navigation (e.g., returning
+// from an OIDC provider) but not on cross-site subresource requests. Strict
+// would break the OIDC return flow.
 func MakeCookie(r *http.Request, email string) *http.Cookie {
 	expires := cookieExpiry()
 	mac := cookieSignature(r, email, fmt.Sprintf("%d", expires.Unix()))
@@ -174,6 +178,7 @@ func MakeCookie(r *http.Request, email string) *http.Cookie {
 		Domain:   cookieDomain(r),
 		HttpOnly: true,
 		Secure:   !config.InsecureCookie,
+		SameSite: http.SameSiteLaxMode,
 		Expires:  expires,
 	}
 }
@@ -187,6 +192,7 @@ func ClearCookie(r *http.Request) *http.Cookie {
 		Domain:   cookieDomain(r),
 		HttpOnly: true,
 		Secure:   !config.InsecureCookie,
+		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Local().Add(time.Hour * -1),
 	}
 }
@@ -208,6 +214,7 @@ func MakeCSRFCookie(r *http.Request, nonce string) *http.Cookie {
 		Domain:   csrfCookieDomain(r),
 		HttpOnly: true,
 		Secure:   !config.InsecureCookie,
+		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Local().Add(time.Hour * 1),
 	}
 }
@@ -221,6 +228,7 @@ func ClearCSRFCookie(r *http.Request, c *http.Cookie) *http.Cookie {
 		Domain:   csrfCookieDomain(r),
 		HttpOnly: true,
 		Secure:   !config.InsecureCookie,
+		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Local().Add(time.Hour * -1),
 	}
 }

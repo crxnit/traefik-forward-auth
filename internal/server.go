@@ -147,8 +147,8 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		valid, providerName, redirect, err := ValidateCSRFCookie(c, state)
 		if !valid {
 			logger.WithFields(logrus.Fields{
-				"error":       err,
-				"csrf_cookie": c,
+				"error":            err,
+				"csrf_cookie_name": c.Name,
 			}).Warn("Error validating csrf cookie")
 			http.Error(w, "Not authorized", 401)
 			return
@@ -158,9 +158,9 @@ func (s *Server) AuthCallbackHandler() http.HandlerFunc {
 		p, err := config.GetConfiguredProvider(providerName)
 		if err != nil {
 			logger.WithFields(logrus.Fields{
-				"error":       err,
-				"csrf_cookie": c,
-				"provider":    providerName,
+				"error":            err,
+				"csrf_cookie_name": c.Name,
+				"provider":         providerName,
 			}).Warn("Invalid provider in csrf cookie")
 			http.Error(w, "Not authorized", 401)
 			return
@@ -239,8 +239,7 @@ func (s *Server) authRedirect(logger *logrus.Entry, w http.ResponseWriter, r *ht
 	http.Redirect(w, r, loginURL, http.StatusTemporaryRedirect)
 
 	logger.WithFields(logrus.Fields{
-		"csrf_cookie": csrf,
-		"login_url":   loginURL,
+		"csrf_cookie_name": csrf.Name,
 	}).Debug("Set CSRF cookie and redirected to provider login url")
 }
 
@@ -256,10 +255,10 @@ func (s *Server) logger(r *http.Request, handler, rule, msg string) *logrus.Entr
 		"source_ip": r.Header.Get("X-Forwarded-For"),
 	})
 
-	// Log request
-	logger.WithFields(logrus.Fields{
-		"cookies": r.Cookies(),
-	}).Debug(msg)
+	// Log request. Cookie values are intentionally omitted — this Debug log
+	// fires on every request, and r.Cookies() would leak the auth cookie's
+	// HMAC+email+expiry any time debug logging is enabled in production.
+	logger.Debug(msg)
 
 	return logger
 }
