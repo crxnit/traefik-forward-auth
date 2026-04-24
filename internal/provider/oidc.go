@@ -3,8 +3,9 @@ package provider
 import (
 	"context"
 	"errors"
+	"net/http"
 
-	"github.com/coreos/go-oidc"
+	oidc "github.com/coreos/go-oidc"
 	"golang.org/x/oauth2"
 )
 
@@ -32,11 +33,19 @@ func (o *OIDC) Setup() error {
 		return errors.New("providers.oidc.issuer-url, providers.oidc.client-id, providers.oidc.client-secret must be set")
 	}
 
-	var err error
-	o.ctx = context.Background()
+	// go-oidc stores the context we pass to NewProvider and reuses it for
+	// later JWKS refreshes, so we cannot use a WithTimeout context here —
+	// it would be cancelled after Setup returns and then every Verify that
+	// needs a JWKS refresh would fail with "context canceled". Instead we
+	// inject a timeout-bounded http.Client via oidc.ClientContext: the
+	// context itself lives forever, but every HTTP call it drives has a
+	// per-request timeout.
+	httpClient := &http.Client{Timeout: providerHTTPTimeout}
+	providerCtx := oidc.ClientContext(context.Background(), httpClient)
 
 	// Try to initiate provider
-	o.provider, err = oidc.NewProvider(o.ctx, o.IssuerURL)
+	var err error
+	o.provider, err = oidc.NewProvider(providerCtx, o.IssuerURL)
 	if err != nil {
 		return err
 	}
@@ -84,8 +93,10 @@ func (o *OIDC) ExchangeCode(redirectURI, code string) (string, error) {
 func (o *OIDC) GetUser(token string) (User, error) {
 	var user User
 
-	// Parse & Verify ID Token
-	idToken, err := o.verifier.Verify(o.ctx, token)
+	// Parse & Verify ID Token. Any JWKS refresh triggered by Verify goes
+	// through the timeout'd http.Client installed at Setup via
+	// oidc.ClientContext, so this call cannot hang on a slow issuer.
+	idToken, err := o.verifier.Verify(context.Background(), token)
 	if err != nil {
 		return user, err
 	}
