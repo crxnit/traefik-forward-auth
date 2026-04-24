@@ -52,3 +52,4 @@ This is a one-day triage of [thomseddon/traefik-forward-auth@v2.3.0](https://git
 4. **HTTP server timeouts**: replace `http.ListenAndServe` with a configured `*http.Server`.
 5. **Constant-time CSRF compare**: `subtle.ConstantTimeCompare` in `ValidateCSRFCookie`.
 6. **External HTTP client timeouts** in `provider/google.go` and `provider/generic_oauth.go`.
+7. **`actions/checkout` / `actions/setup-go` Node 24 bump** — deadline June 2026.
